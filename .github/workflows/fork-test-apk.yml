@@ -49,11 +49,6 @@ jobs:
         run: |
           npm test
           python3 -m unittest discover -s tests -p 'test_*.py'
-      - name: Check responsive browser layouts
-        run: |
-          npx playwright install --with-deps chromium
-          sudo apt-get install -y fonts-noto-cjk
-          npm run test:layout
       - name: Refresh fork-only Termux package lock
         run: |
           # Termux is a rolling repository. The checked-in snapshot contains
@@ -89,6 +84,11 @@ jobs:
           mkdir -p artifacts/fork-debug
           sha256sum "$apk" > artifacts/fork-debug/SHA256SUMS
           cp docs/fork-build.md artifacts/fork-debug/INSTALL.md
+      - name: Check responsive browser layouts
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+          npm run test:layout
       - name: Upload verified installable test APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
