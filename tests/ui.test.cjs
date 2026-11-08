@@ -404,6 +404,16 @@ test('opening Tools while Codex is disconnected never starts native app-server R
   assert.equal(calls.filter(x=>x.action==='rpc').length,0);
   assert.match(d.getElementById('tools-list').textContent,/Native dependency error/);
 });
+test('offline Tools panel is readable in English without native RPC requests',async()=>{
+  const {w,calls,snapshot}=setup({}, {language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,ready:false,authState:'error'});
+  const d=w.document; d.getElementById('show-tools').click();await tick();
+  d.getElementById('show-tools-panel').click();await tick();
+  assert.match(d.getElementById('tools-list').textContent,/Codex is not connected/);
+  assert.match(d.getElementById('tools-list').textContent,/Start \/ reconnect Codex/);
+  assert.equal(calls.filter(c=>c.action==='rpc').length,0);
+});
 test('a Codex native disconnect aborts remaining Tools requests without relaunch loops',async()=>{
   const {w,calls}=setup({'rpc':m=>{
     if (m.args.method==='plugin/list') throw Error('Codex stopped running and disconnected. (Native dependency error)');
