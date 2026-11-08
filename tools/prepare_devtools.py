@@ -476,6 +476,29 @@ def safe_tar_members(archive: tarfile.TarFile) -> Iterable[tarfile.TarInfo]:
         yield member
 
 
+def select_cpp_runtime(app_exports: set[str], termux_exports: set[str],
+                       app_required: set[str], tools_required: set[str],
+                       allow_test_replacement: bool) -> bool:
+    """Decide if the test build may use hash-verified Termux libc++ instead.
+
+    Never allow runtime replacement unless both the app's existing native
+    consumers and the newly bundled developer tools resolve their imported
+    C++ symbols. Production builds must keep the original runtime.
+    """
+    missing_tools = tools_required - app_exports
+    if not missing_tools:
+        return False
+    if not allow_test_replacement:
+        raise PackagingError(f"app libc++_shared.so lacks Termux-required ABI symbols: {sorted(missing_tools)}")
+    missing_app = app_required - termux_exports
+    if missing_app:
+        raise PackagingError(f"Termux libc++ lacks Codex-required ABI symbols: {sorted(missing_app)}")
+    missing_termux = tools_required - termux_exports
+    if missing_termux:
+        raise PackagingError(f"Termux libc++ lacks developer-tool ABI symbols: {sorted(missing_termux)}")
+    return True
+
+
 def elf_info(data: bytes) -> dict[str, Any] | None:
     if len(data) < 64 or data[:4] != b"\x7fELF":
         return None
@@ -807,9 +830,25 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
         for binary in original_binaries.values():
             if binary is not None and "libc++_shared.so" in binary.libraries:
                 cpp_required.update(symbol.name for symbol in binary.dynamic_symbols if symbol.imported and symbol.name in termux_cpp_exports)
-        missing_cpp_symbols = sorted(cpp_required - app_cpp_exports)
-        if missing_cpp_symbols:
-            raise PackagingError(f"app libc++_shared.so lacks Termux-required ABI symbols: {missing_cpp_symbols}")
+        # The original Codex native binaries and the launcher must continue to
+        # resolve every C++ symbol they actually import after any fork-only swap.
+        app_cpp_required: set[str] = set()
+        for binary_path in NATIVE_DIR.glob("*.so"):
+            if binary_path == existing_cpp:
+                continue
+            binary = lief.parse(str(binary_path))
+            if binary is not None and "libc++_shared.so" in binary.libraries:
+                app_cpp_required.update(symbol.name for symbol in binary.dynamic_symbols
+                                        if symbol.imported and symbol.name in app_cpp_exports)
+        if select_cpp_runtime(app_cpp_exports, termux_cpp_exports, app_cpp_required,
+                              cpp_required, os.environ.get("MOBILE_CODEX_FORK_TEST") == "true"):
+            extra_needed = set(termux_cpp.libraries) - SYSTEM_NEEDED
+            if extra_needed:
+                raise PackagingError(f"replacement libc++ has unsupported runtime dependencies: {sorted(extra_needed)}")
+            # The Termux libc++ is an SHA-256-verified file from the generated
+            # lock, not an arbitrary downloaded binary. The build manifest
+            # records the final app-owned library's checksum.
+            existing_cpp.write_bytes(termux_cpp_data)
         # Some Termux shared libraries deliberately omit DT_SONAME. Their
         # package symlink is then the ABI name referenced by consumers.
         for link, target in symlinks.items():
