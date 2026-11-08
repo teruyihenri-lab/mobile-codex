@@ -76,6 +76,18 @@ class DevtoolsPackagingTests(unittest.TestCase):
         }
         self.assertEqual(devtools.resolve_packages(index, ("proot",)), ["libandroid-shmem", "libtalloc", "proot"])
 
+    def test_cpp_runtime_replacement_covers_codex_and_termux_native_imports(self):
+        old = {'old_symbol'}
+        fresh = {'old_symbol', 'new_symbol'}
+        self.assertFalse(devtools.select_cpp_runtime(old, fresh, {'old_symbol'}, {'old_symbol'}, True))
+        self.assertTrue(devtools.select_cpp_runtime(old, fresh, {'old_symbol'}, {'new_symbol'}, True))
+        with self.assertRaisesRegex(devtools.PackagingError, 'lacks Termux-required ABI'):
+            devtools.select_cpp_runtime(old, fresh, {'old_symbol'}, {'new_symbol'}, False)
+        with self.assertRaisesRegex(devtools.PackagingError, 'lacks Codex-required ABI'):
+            devtools.select_cpp_runtime(old, {'new_symbol'}, {'old_symbol'}, {'new_symbol'}, True)
+        with self.assertRaisesRegex(devtools.PackagingError, 'lacks developer-tool ABI'):
+            devtools.select_cpp_runtime(old, {'old_symbol'}, {'old_symbol'}, {'new_symbol'}, True)
+
     def test_symlinks_to_absolute_termux_prefix_are_relocated_without_host_access(self):
         member = './data/data/com.termux/files/usr/lib/python3.14/site-packages/pip/_vendor/certifi/cacert.pem'
         pinned = '/data/data/com.termux/files/usr/etc/tls/cert.pem'
