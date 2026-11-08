@@ -66,6 +66,8 @@ jobs:
           print("Fork test lock: " + str(len(packages)) + " hash-pinned Termux packages, index SHA-256 " + lock["index"]["sha256"])
           PY
       - name: Prepare pinned ARM64 runtime and developer tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           sdkmanager 'ndk;28.2.13676358'
           python3 tools/prepare_runtime.py
