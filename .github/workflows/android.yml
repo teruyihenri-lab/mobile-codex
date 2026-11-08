@@ -76,6 +76,9 @@ jobs:
           retention-days: 7
   build:
     name: Build verified APK once
+    # The upstream production workflow needs the publisher's original signing key.
+    # Forks use fork-test-apk.yml with an isolated debug application ID instead.
+    if: github.repository == 'nokryong/mobile-codex' || github.repository == 'SeeUSoon93/mobile-codex'
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30

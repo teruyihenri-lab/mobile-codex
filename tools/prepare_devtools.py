@@ -82,21 +82,28 @@ def download(url: str, destination: Path, expected_sha256: str | None = None) ->
         return
     partial = destination.with_suffix(destination.suffix + ".partial")
     partial.unlink(missing_ok=True)
-    # A pinned package can disappear from the primary pool while a listed mirror still
-    # retains it. Mirrors may only supply the identical bytes from the existing lock.
+    # Archived Termux releases can vanish from the rolling primary repository.
+    # Only pinned .deb inputs may use mirror fallbacks; every candidate MUST
+    # match the exact SHA-256 in devtools-lock.json before being accepted.
     urls = [url]
     if expected_sha256 and url.startswith(POOL_URL):
-        urls.append("https://ro.mirror.flokinet.net/termux/termux-main/" + url[len(POOL_URL):])
+        suffix = url[len(POOL_URL):]
+        urls.extend(base + suffix for base in (
+            "https://ro.mirror.flokinet.net/termux/termux-main/",
+            "https://repository.su/termux/termux-main/",
+            "https://mirrors.ravidwivedi.in/termux/termux-main/",
+            "https://termux.librehat.com/apt/termux-main/",
+        ))
     last_error = None
     for candidate in urls:
         try:
-            with urllib.request.urlopen(candidate, timeout=180) as response, partial.open("wb") as output:
+            with urllib.request.urlopen(candidate, timeout=45) as response, partial.open("wb") as output:
                 shutil.copyfileobj(response, output)
             if expected_sha256 and sha256_file(partial) != expected_sha256:
                 raise PackagingError(f"SHA-256 mismatch for {candidate}")
             partial.replace(destination)
             return
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, PackagingError) as error:
             last_error = error
         finally:
             partial.unlink(missing_ok=True)

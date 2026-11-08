@@ -25,8 +25,44 @@ class PinnedDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dest = Path(directory) / 'input.deb'
             url = devtools.POOL_URL + 'pool/input.deb'
-            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[urllib.error.HTTPError(url, 404, 'missing', {}, None), io.BytesIO(b'wrong')]):
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[urllib.error.HTTPError(url, 404, 'missing', {}, None)] + [io.BytesIO(b'wrong') for _ in range(4)]):
                 with self.assertRaises(devtools.PackagingError):
                     devtools.download(url, dest, hashlib.sha256(b'right').hexdigest())
             self.assertFalse(dest.exists())
             self.assertFalse(dest.with_suffix('.deb.partial').exists())
+
+    def test_primary_and_first_mirror_missing_uses_archived_pinned_package(self):
+        data = b'archived pinned bytes'
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / 'input.deb'
+            url = devtools.POOL_URL + 'pool/input.deb'
+            missing = urllib.error.HTTPError(url, 404, 'not found', {}, None)
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[missing, missing, io.BytesIO(data)]) as request:
+                devtools.download(url, dest, hashlib.sha256(data).hexdigest())
+                self.assertEqual(dest.read_bytes(), data)
+                self.assertEqual(request.call_count, 3)
+                self.assertIn('repository.su', request.call_args_list[2].args[0])
+
+    def test_mirror_checksum_mismatch_continues_and_does_not_keep_wrong_bytes(self):
+        data = b'expected exact package'
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / 'input.deb'
+            url = devtools.POOL_URL + 'pool/input.deb'
+            missing = urllib.error.HTTPError(url, 404, 'not found', {}, None)
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[
+                missing, io.BytesIO(b'wrong package'), io.BytesIO(data)]) as request:
+                devtools.download(url, dest, hashlib.sha256(data).hexdigest())
+                self.assertEqual(request.call_count, 3)
+                self.assertEqual(dest.read_bytes(), data)
+
+    def test_all_mirrors_fail_without_leaving_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / 'input.deb'
+            url = devtools.POOL_URL + 'pool/input.deb'
+            missing = urllib.error.HTTPError(url, 404, 'not found', {}, None)
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[missing] * 5) as request:
+                with self.assertRaises(devtools.PackagingError):
+                    devtools.download(url, dest, hashlib.sha256(b'expected').hexdigest())
+                self.assertEqual(request.call_count, 5)
+                self.assertFalse(dest.exists())
+                self.assertFalse(dest.with_suffix('.deb.partial').exists())
