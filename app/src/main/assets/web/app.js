@@ -14,6 +14,7 @@
   let historyView = {threadId:'', hasMore:false, beforeId:'', total:0, loading:false, loaded:false, top:0};
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
+  let loginAttempt = 0, loginStarting = false, loginAdd = false;
   let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, authState:'unknown', rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
   let fileContextGeneration = 0, fileReadSeq = 0, fileInputContext = null, searchTimer;
   const fileDrafts = new Map();
@@ -1538,12 +1539,50 @@
     while ($('event-log').children.length > 150) $('event-log').firstChild.remove();
   }
   async function startLogin(add = false) {
+    if (loginStarting) {
+      // Only one native device-code transaction may be active at a time.
+      show('login-dialog');
+      $('device-code').textContent = t('연결 준비 중');
+      return;
+    }
     if (C.isLoggedIn(state.account) && !add) return openAccountSettings();
     if (!add && !accountNeedsLogin()) return openAccountSettings();
-    show('login-dialog'); $('device-code').textContent = t('연결 준비 중'); $('open-login').disabled = true;
-    login = await call(add ? 'auth.add' : 'auth.login');
-    if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
-    $('device-code').textContent = login.userCode; $('open-login').disabled = false;
+    const attempt = ++loginAttempt;
+    loginStarting = true; loginAdd = add; login = null;
+    show('login-dialog');
+    $('device-code').textContent = t('연결 준비 중');
+    $('open-login').disabled = true;
+    $('retry-login').hidden = true;
+    $('login-help').textContent = t('로그인이 완료되면 이 화면으로 돌아오세요.');
+    try {
+      const started = await call(add ? 'auth.add' : 'auth.login');
+      // Closing the dialog while the native server starts must never expose
+      // a stale device code or leave a pending login with no cancel button.
+      if (attempt !== loginAttempt || !$('login-dialog').open) {
+        if (started?.loginId) await call('auth.cancel', {loginId: started.loginId}).catch(() => {});
+        return;
+      }
+      if (!started?.loginId || !started.userCode || !C.safeLoginUrl(started.verificationUrl)) {
+        if (started?.loginId) await call('auth.cancel', {loginId: started.loginId}).catch(() => {});
+        throw new Error(t('잘못된 로그인 응답입니다.'));
+      }
+      login = started;
+      $('device-code').textContent = login.userCode;
+      $('open-login').disabled = false;
+    } catch (error) {
+      if (attempt !== loginAttempt || !$('login-dialog').open) return;
+      login = null;
+      $('device-code').textContent = t('연결하지 못했습니다.');
+      $('login-help').textContent = errorText(error);
+      $('retry-login').hidden = false;
+    } finally {
+      loginStarting = false;
+      if (attempt !== loginAttempt && $('login-dialog').open) {
+        $('device-code').textContent = t('연결하지 못했습니다.');
+        $('login-help').textContent = t('다시 시도');
+        $('retry-login').hidden = false;
+      }
+    }
   }
   function fileWorkspaceScope(snapshot = state) {
     return JSON.stringify([accountScope(snapshot.account), snapshot.workspace?.key || '', !!snapshot.workspace?.selected, snapshot.workspace?.available !== false, snapshot.cwd || '']);
@@ -2176,7 +2215,16 @@
     else if (name === 'voice.state') drawDictation(data);
     else if (name === 'voice.changed') recoverVoiceInput();
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
-    else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); } else $('login-help').textContent = data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'); }
+    else if (name === 'login.completed') {
+      if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); }
+      else if ($('login-dialog').open) {
+        login = null;
+        $('open-login').disabled = true;
+        $('device-code').textContent = t('연결하지 못했습니다.');
+        $('login-help').textContent = errorText(data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'));
+        $('retry-login').hidden = false;
+      }
+    }
     else if (name === 'terminal.state') renderTerminal(data);
     else if (name === 'terminal.inputError' && data.id === terminalState.id && data.revision > terminalState.revision && terminalState.running && !terminalState.stopping) {
       terminalState.revision = data.revision;
@@ -2407,7 +2455,14 @@
   }));
   on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast(t('코드를 복사했습니다.')); } });
   on('open-login', () => login && call('ui.loginBrowser', {url: login.verificationUrl}));
-  $('login-dialog').addEventListener('close', () => { if (login?.loginId) call('auth.cancel', {loginId: login.loginId}).catch(() => {}); login = null; });
+  on('retry-login', () => startLogin(loginAdd));
+  $('login-dialog').addEventListener('close', () => {
+    ++loginAttempt;
+    const closing = login; login = null;
+    $('open-login').disabled = true;
+    $('retry-login').hidden = true;
+    if (closing?.loginId) call('auth.cancel', {loginId: closing.loginId}).catch(() => {});
+  });
   on('account-add', () => startLogin(true));
   on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', async () => { if (!C.isLoggedIn(state.account)) return startLogin(false); if (!confirm(t('현재 계정을 이 기기에서 로그아웃할까요?'))) return; await call('auth.logout'); });
   on('usage-refresh', loadUsage);

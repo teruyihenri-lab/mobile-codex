@@ -573,6 +573,66 @@ test('quota reset captions localize English without changing the percentage',asy
  assert.match(d.getElementById('usage-limits').textContent,/Resets [\s\S]*Weekly limit/);
 });
 
+test('failed device-code startup stays in the dialog and offers a retry',async()=>{
+  let attempts=0;
+  const {w,calls,snapshot}=setup({'auth.login':()=>{if(++attempts===1)throw new Error('runtime unavailable');return {loginId:'second',userCode:'WXYZ',verificationUrl:'https://auth.openai.com/codex/device'};}});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+  const d=w.document;d.getElementById('connect').click();await tick();await tick();
+  assert.equal(d.getElementById('login-dialog').open,true);
+  assert.equal(d.getElementById('open-login').disabled,true);
+  assert.equal(d.getElementById('retry-login').hidden,false);
+  assert.match(d.getElementById('login-help').textContent,/runtime unavailable/);
+  d.getElementById('retry-login').click();await tick();await tick();
+  assert.equal(calls.filter(c=>c.action==='auth.login').length,2);
+  assert.equal(d.getElementById('device-code').textContent,'WXYZ');
+  assert.equal(d.getElementById('open-login').disabled,false);
+  assert.equal(d.getElementById('retry-login').hidden,true);
+});
+test('closing a pending device-code dialog cancels a late sign-in response',async()=>{
+  let finish;
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>new Promise(resolve=>{finish=resolve;}),
+    'auth.cancel':()=>({ok:true})
+  });
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+  const d=w.document;d.getElementById('connect').click();await tick();
+  assert.equal(typeof finish,'function');
+  d.getElementById('login-dialog').close();
+  finish({loginId:'late',userCode:'SECRET',verificationUrl:'https://auth.openai.com/codex/device'});
+  await tick();await tick();
+  assert.deepEqual(calls.filter(c=>c.action==='auth.cancel').map(c=>c.args),[{loginId:'late'}]);
+  assert.equal(d.getElementById('open-login').disabled,true);
+  assert.notEqual(d.getElementById('device-code').textContent,'SECRET');
+});
+test('failed device-code completion keeps the dialog open for a fresh login',async()=>{
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>({loginId:'first',userCode:'ABCD',verificationUrl:'https://auth.openai.com/codex/device'})
+  });
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+  const d=w.document;d.getElementById('connect').click();await tick();
+  w.mobileCodexEvent('login.completed',{success:false,error:'Authorization denied'});
+  assert.equal(d.getElementById('open-login').disabled,true);
+  assert.equal(d.getElementById('retry-login').hidden,false);
+  assert.match(d.getElementById('login-help').textContent,/Authorization denied/);
+  assert.equal(d.getElementById('login-dialog').open,true);
+});
+
+test('invalid device login response cancels native attempt and offers retry',async()=>{
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>({loginId:'invalid',userCode:'1234',verificationUrl:'https://evil.example/login'}),
+    'auth.cancel':()=>({ok:true})
+  });
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+  const d=w.document;d.getElementById('connect').click();await tick();await tick();
+  assert.deepEqual(calls.filter(c=>c.action==='auth.cancel').map(c=>c.args),[{loginId:'invalid'}]);
+  assert.equal(d.getElementById('open-login').disabled,true);
+  assert.equal(d.getElementById('retry-login').hidden,false);
+});
+
 test('account profiles can add, switch and remove without exposing credentials',async()=>{
  const {w,calls,snapshot}=setup({
    'auth.add':()=>({loginId:'new',verificationUrl:'https://auth.openai.com/codex/device',userCode:'ABCD'}),

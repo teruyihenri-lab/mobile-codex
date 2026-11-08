@@ -1015,7 +1015,7 @@ public final class Engine {
             launchedConnection[0] = rpc;
             rpc.start();
             diagnostic.initializing();
-            call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
+            call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", BuildConfig.VERSION_NAME),
                 "capabilities", obj("experimentalApi", true)));
             diagnostic.initialized();
             rpc.notify("initialized", new JSONObject());
