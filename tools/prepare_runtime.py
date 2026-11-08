@@ -14,6 +14,7 @@ import tarfile
 import urllib.request
 import urllib.error
 import time
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,31 +41,43 @@ def patch_host_name(binary, expected_occurrences=2):
     return binary.replace(old, new)
 
 
-def download_runtime(url, archive, integrity, retries=3):
-    """Download the checksum-pinned runtime; retry only transient network errors.
+def download_runtime(url, archive, integrity, retries=3, github_asset_id=None):
+    """Download the pinned runtime from release/CDN or GitHub's release API.
 
-    GitHub release CDN can intermittently return HTTP 504 or lose a connection
-    on CI runners. Never retain a partial or accept a digest mismatch.
+    Every route must match the same SHA-512. Never ship an unknown archive.
+    The GitHub release API is a fallback for transient 504s on the browser
+    release endpoint; it is not a replacement for integrity verification.
     """
     partial = archive.with_suffix('.partial')
-    for attempt in range(retries):
-        try:
-            partial.unlink(missing_ok=True)
-            with urllib.request.urlopen(url, timeout=180) as src, partial.open('wb') as dst:
-                shutil.copyfileobj(src, dst)
-            verify(partial, integrity)
-            partial.replace(archive)
-            return
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
-            # Non-transient 4xx responses (apart from throttling and timeout)
-            # are configuration failures, not a reason to retry downloads.
-            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
-                raise
-            if attempt == retries - 1:
-                raise
-            time.sleep(min(2 ** attempt, 4))
-        finally:
-            partial.unlink(missing_ok=True)
+    candidates = [url]
+    if github_asset_id and url.startswith("https://github.com/"):
+        # This asset ID is pinned alongside the release URL in runtime-lock.json.
+        repo = url.removeprefix("https://github.com/").split("/releases/download/", 1)[0]
+        if repo.count("/") == 1 and str(github_asset_id).isdigit():
+            candidates.append(f"https://api.github.com/repos/{repo}/releases/assets/{github_asset_id}")
+    last_error = None
+    for candidate in candidates:
+        for attempt in range(retries):
+            try:
+                partial.unlink(missing_ok=True)
+                headers = {"User-Agent":"mobile-codex-android-packager/1", "Accept":"application/octet-stream"}
+                if candidate.startswith("https://api.github.com/") and os.environ.get("GITHUB_TOKEN"):
+                    headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+                request = urllib.request.Request(candidate, headers=headers)
+                with urllib.request.urlopen(request, timeout=180) as src, partial.open('wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                verify(partial, integrity)
+                partial.replace(archive)
+                return
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+                last_error = error
+                if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
+                    break
+                if attempt < retries - 1:
+                    time.sleep(min(2 ** attempt, 4))
+            finally:
+                partial.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not download SHA-512-pinned runtime: {type(last_error).__name__}") from last_error
 
 
 def prepare(archive, lock_path=None):
@@ -75,7 +88,7 @@ def prepare(archive, lock_path=None):
         archive = ROOT / '.runtime-cache' / f"codex-{lock['version']}.tgz"
         archive.parent.mkdir(parents=True, exist_ok=True)
         if not archive.exists():
-            download_runtime(lock['url'], archive, lock['integrity'])
+            download_runtime(lock['url'], archive, lock['integrity'], github_asset_id=lock.get('githubAssetId'))
     verify(archive, lock['integrity'])
     out = ROOT / 'app/src/main/jniLibs/arm64-v8a'
     assets = ROOT / 'app/src/main/assets/runtime'
