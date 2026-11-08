@@ -60,7 +60,8 @@ test('normal releases do not upload duplicate APK artifacts',()=>{
 
 test('private and public main releases build independently after full checks',()=>{
  assert.doesNotMatch(workflow,/^  mirror:|sync_release_assets.py|inputs.private_release/m);
- for (const name of ['checks','build']) assert.doesNotMatch(job(name),/^    if:/m);
+ assert.doesNotMatch(job('checks'),/^    if:/m);
+ assert.match(job('build'),/^    if: github.repository == 'nokryong\/mobile-codex' \|\| github.repository == 'SeeUSoon93\/mobile-codex'$/m);
  const step=job('build').slice(job('build').indexOf('- name: Publish versioned GitHub release'));
  assert.match(step,/github.repository == 'SeeUSoon93\/mobile-codex'/);
  assert.match(step,/github.repository == 'nokryong\/mobile-codex'/);
