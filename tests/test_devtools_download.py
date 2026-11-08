@@ -66,3 +66,27 @@ class PinnedDownloadTests(unittest.TestCase):
                 self.assertEqual(request.call_count, 5)
                 self.assertFalse(dest.exists())
                 self.assertFalse(dest.with_suffix('.deb.partial').exists())
+
+    def test_live_packages_index_uses_https_mirror_on_network_outage(self):
+        index = b'Package: fixture\nVersion: 1\nArchitecture: aarch64\n\n'
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / 'Packages'
+            unreachable = urllib.error.URLError(OSError(101, 'Network is unreachable'))
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[unreachable, io.BytesIO(index)]) as request:
+                devtools.download(devtools.INDEX_URL, dest)
+                self.assertEqual(dest.read_bytes(), index)
+                self.assertEqual(request.call_count, 2)
+                self.assertIn('/dists/stable/main/binary-aarch64/Packages',
+                              request.call_args_list[1].args[0])
+                self.assertIn('ro.mirror.flokinet.net',
+                              request.call_args_list[1].args[0])
+
+    def test_live_index_fails_closed_when_every_termux_mirror_unreachable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / 'Packages'
+            network_error = urllib.error.URLError(OSError(101, 'Network is unreachable'))
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[network_error] * 5):
+                with self.assertRaises(devtools.PackagingError):
+                    devtools.download(devtools.INDEX_URL, dest)
+                self.assertFalse(dest.exists())
+                self.assertFalse(dest.with_suffix('.partial').exists())
