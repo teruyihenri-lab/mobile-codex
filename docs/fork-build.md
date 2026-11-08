@@ -35,6 +35,15 @@ package integrity verification. The original release workflow is unchanged.
 This is suitable for the **test APK** pipeline but does not replace a
 reviewed, committed lockfile for reproducible production releases.
 
+## C++ runtime compatibility in fork debug builds
+
+If the latest Termux packages require symbols missing from the older Codex
+`libc++_shared.so`, the fork test packager may select the hash-verified
+Termux library **only after** checking the original Codex/launcher consumers'
+imported C++ symbols and the developer tools' required symbols. Any missing
+symbol or unexpected dependency fails the build. This selection is isolated
+to the fork test pipeline and never changes the publisher's release path.
+
 ## Known limitations
 
 The sign-in startup/initialize timeout reported in upstream issue #15 is unresolved
