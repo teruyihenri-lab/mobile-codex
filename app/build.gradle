@@ -39,7 +39,15 @@ android {
         }
     }
     buildTypes {
-        debug { if (suppliedSigningStore) signingConfig signingConfigs.provided }
+        debug {
+            if (suppliedSigningStore) signingConfig signingConfigs.provided
+            // Fork CI uses a distinct package so a test APK never replaces or
+            // conflicts with the original app signed by another certificate.
+            if (System.getenv('MOBILE_CODEX_FORK_TEST') == 'true') {
+                applicationIdSuffix '.fork'
+                versionNameSuffix '-fork'
+            }
+        }
         release {
             debuggable false
             minifyEnabled false
