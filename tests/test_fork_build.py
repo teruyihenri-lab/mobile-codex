@@ -11,6 +11,11 @@ class ForkApkBuildTests(unittest.TestCase):
         self.assertIn("System.getenv('MOBILE_CODEX_FORK_TEST') == 'true'", gradle)
         self.assertIn("applicationIdSuffix '.fork'", gradle)
 
+    def test_upstream_production_job_is_disabled_on_public_forks(self):
+        workflow = (ROOT / '.github/workflows/android.yml').read_text(encoding='utf-8')
+        self.assertIn("if: github.repository == 'nokryong/mobile-codex' || github.repository == 'SeeUSoon93/mobile-codex'", workflow)
+        self.assertIn("run: python3 tools/sign_ci_apk.py --check-config", workflow)
+
     def test_fork_workflow_tests_before_upload_and_does_not_publish_or_request_secrets(self):
         workflow = (ROOT / '.github/workflows/fork-test-apk.yml').read_text(encoding='utf-8')
         self.assertIn("github.repository == 'teruyihenri-lab/mobile-codex'", workflow)
