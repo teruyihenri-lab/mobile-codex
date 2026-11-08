@@ -22,6 +22,19 @@ Never share or copy your original app's credentials into CI to bypass this restr
 Only a production APK signed with the original certificate can update an existing
 `dev.mobilecodex.app` installation without uninstalling it.
 
+## Why the fork refreshes its Termux build lock
+
+The checked-in lock pins historic Termux `.deb` versions, which may disappear
+from the rolling official package server. The **fork test** workflow downloads
+the current official aarch64 package index, freezes package versions and
+SHA-256 values into a fresh lock, and verifies every `.deb` against that lock.
+The exact generated `tools/devtools-lock.json` is included in the build
+artifact for traceability. It never falls back to unchecked files or disables
+package integrity verification. The original release workflow is unchanged.
+
+This is suitable for the **test APK** pipeline but does not replace a
+reviewed, committed lockfile for reproducible production releases.
+
 ## Known limitations
 
 The sign-in startup/initialize timeout reported in upstream issue #15 is unresolved
