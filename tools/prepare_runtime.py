@@ -72,6 +72,8 @@ def download_runtime(url, archive, integrity, retries=3, github_asset_id=None):
             except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
                 last_error = error
                 if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
+                    if candidate == candidates[-1]:
+                        raise
                     break
                 if attempt < retries - 1:
                     time.sleep(min(2 ** attempt, 4))
