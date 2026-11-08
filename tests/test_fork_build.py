@@ -16,6 +16,16 @@ class ForkApkBuildTests(unittest.TestCase):
         self.assertIn("if: github.repository == 'nokryong/mobile-codex' || github.repository == 'SeeUSoon93/mobile-codex'", workflow)
         self.assertIn("run: python3 tools/sign_ci_apk.py --check-config", workflow)
 
+    def test_fork_resolves_a_fresh_content_addressed_termux_lock_for_debug_only(self):
+        workflow = (ROOT / '.github/workflows/fork-test-apk.yml').read_text(encoding='utf-8')
+        upstream = (ROOT / '.github/workflows/android.yml').read_text(encoding='utf-8')
+        self.assertIn("python3 tools/prepare_devtools.py --write-lock", workflow)
+        self.assertLess(workflow.index("python3 tools/prepare_devtools.py --write-lock"),
+                        workflow.index("python3 tools/prepare_devtools.py --verify"))
+        self.assertIn("tools/devtools-lock.json", workflow)
+        self.assertIn('rm -f .runtime-cache/termux-Packages', workflow)
+        self.assertNotIn("python3 tools/prepare_devtools.py --write-lock", upstream)
+
     def test_fork_workflow_tests_before_upload_and_does_not_publish_or_request_secrets(self):
         workflow = (ROOT / '.github/workflows/fork-test-apk.yml').read_text(encoding='utf-8')
         self.assertIn("github.repository == 'teruyihenri-lab/mobile-codex'", workflow)
