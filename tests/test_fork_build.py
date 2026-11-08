@@ -37,6 +37,8 @@ class ForkApkBuildTests(unittest.TestCase):
         self.assertLess(workflow.index('npm test'), workflow.index('Upload verified installable test APK'))
         self.assertLess(workflow.index('assembleDebug testDebugUnitTest'), workflow.index('Upload verified installable test APK'))
         self.assertNotIn('${{ secrets.', workflow)
+        self.assertLess(workflow.index('Prepare pinned ARM64 runtime and developer tools'), workflow.index('Check responsive browser layouts'))
+        self.assertLess(workflow.index('Build debug APK, compile Android tests, run unit tests and lint'), workflow.index('Check responsive browser layouts'))
         self.assertNotIn('gh release', workflow)
         self.assertRegex(workflow, r'permissions:\n  contents: read')
 
