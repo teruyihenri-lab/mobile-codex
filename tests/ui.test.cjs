@@ -573,6 +573,29 @@ test('quota reset captions localize English without changing the percentage',asy
  assert.match(d.getElementById('usage-limits').textContent,/Resets [\s\S]*Weekly limit/);
 });
 
+test('first account from settings uses ordinary ChatGPT device login instead of add-profile transaction',async()=>{
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>({loginId:'fresh',userCode:'ABCD',verificationUrl:'https://auth.openai.com/codex/device'}),
+    'auth.add':()=>{throw Error('must not try to preserve missing credentials');}
+  }, {language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},accounts:[],authState:'signed_out'});
+  w.document.getElementById('account-button').click();await tick();
+  w.document.getElementById('account-add').click();await tick();await tick();
+  assert.equal(calls.filter(x=>x.action==='auth.login').length,1);
+  assert.equal(calls.filter(x=>x.action==='auth.add').length,0);
+  assert.equal(w.document.getElementById('device-code').textContent,'ABCD');
+  assert.equal(w.document.getElementById('open-login').disabled,false);
+});
+test('English UI translates login connection failure instead of showing untranslated Korean',async()=>{
+  const {w,snapshot}=setup({'auth.login':()=>{throw Error('network unavailable');}},{language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},accounts:[],authState:'signed_out'});
+  w.document.getElementById('connect').click();await tick();await tick();
+  assert.equal(w.document.getElementById('device-code').textContent,'Could not connect.');
+  assert.match(w.document.getElementById('login-help').textContent,/network unavailable/);
+});
+
 test('failed device-code startup stays in the dialog and offers a retry',async()=>{
   let attempts=0;
   const {w,calls,snapshot}=setup({'auth.login':()=>{if(++attempts===1)throw new Error('runtime unavailable');return {loginId:'second',userCode:'WXYZ',verificationUrl:'https://auth.openai.com/codex/device'};}});
