@@ -54,6 +54,22 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get install -y fonts-noto-cjk
           npm run test:layout
+      - name: Refresh fork-only Termux package lock
+        run: |
+          # Termux is a rolling repository. The checked-in snapshot contains
+          # versions that have been removed from its package pool. Resolve a
+          # fresh, content-addressed lock for this isolated debug build only.
+          # The production release workflow retains its checked-in lock.
+          rm -f .runtime-cache/termux-Packages
+          python3 tools/prepare_devtools.py --write-lock
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          lock = json.loads(Path("tools/devtools-lock.json").read_text())
+          packages = lock["packages"]
+          assert packages and all(len(p["sha256"]) == 64 and p["filename"].startswith("pool/") for p in packages)
+          print("Fork test lock: " + str(len(packages)) + " hash-pinned Termux packages, index SHA-256 " + lock["index"]["sha256"])
+          PY
       - name: Prepare pinned ARM64 runtime and developer tools
         run: |
           sdkmanager 'ndk;28.2.13676358'
@@ -81,6 +97,7 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             artifacts/fork-debug/SHA256SUMS
             artifacts/fork-debug/INSTALL.md
+            tools/devtools-lock.json
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
