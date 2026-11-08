@@ -12,6 +12,8 @@ from pathlib import Path
 import shutil
 import tarfile
 import urllib.request
+import urllib.error
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +40,33 @@ def patch_host_name(binary, expected_occurrences=2):
     return binary.replace(old, new)
 
 
+def download_runtime(url, archive, integrity, retries=3):
+    """Download the checksum-pinned runtime; retry only transient network errors.
+
+    GitHub release CDN can intermittently return HTTP 504 or lose a connection
+    on CI runners. Never retain a partial or accept a digest mismatch.
+    """
+    partial = archive.with_suffix('.partial')
+    for attempt in range(retries):
+        try:
+            partial.unlink(missing_ok=True)
+            with urllib.request.urlopen(url, timeout=180) as src, partial.open('wb') as dst:
+                shutil.copyfileobj(src, dst)
+            verify(partial, integrity)
+            partial.replace(archive)
+            return
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+            # Non-transient 4xx responses (apart from throttling and timeout)
+            # are configuration failures, not a reason to retry downloads.
+            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
+                raise
+            if attempt == retries - 1:
+                raise
+            time.sleep(min(2 ** attempt, 4))
+        finally:
+            partial.unlink(missing_ok=True)
+
+
 def prepare(archive, lock_path=None):
     lock = json.loads((lock_path or ROOT / 'tools/runtime-lock.json').read_text())
     if lock.get('testOnly') and archive is None:
@@ -46,11 +75,7 @@ def prepare(archive, lock_path=None):
         archive = ROOT / '.runtime-cache' / f"codex-{lock['version']}.tgz"
         archive.parent.mkdir(parents=True, exist_ok=True)
         if not archive.exists():
-            partial = archive.with_suffix('.partial')
-            with urllib.request.urlopen(lock['url'], timeout=180) as src, partial.open('wb') as dst:
-                shutil.copyfileobj(src, dst)
-            verify(partial, lock['integrity'])
-            partial.replace(archive)
+            download_runtime(lock['url'], archive, lock['integrity'])
     verify(archive, lock['integrity'])
     out = ROOT / 'app/src/main/jniLibs/arm64-v8a'
     assets = ROOT / 'app/src/main/assets/runtime'
