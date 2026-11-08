@@ -606,6 +606,20 @@ test('closing a pending device-code dialog cancels a late sign-in response',asyn
   assert.equal(d.getElementById('open-login').disabled,true);
   assert.notEqual(d.getElementById('device-code').textContent,'SECRET');
 });
+test('failed device-code completion keeps the dialog open for a fresh login',async()=>{
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>({loginId:'first',userCode:'ABCD',verificationUrl:'https://auth.openai.com/codex/device'})
+  });
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+  const d=w.document;d.getElementById('connect').click();await tick();
+  w.mobileCodexEvent('login.completed',{success:false,error:'Authorization denied'});
+  assert.equal(d.getElementById('open-login').disabled,true);
+  assert.equal(d.getElementById('retry-login').hidden,false);
+  assert.match(d.getElementById('login-help').textContent,/Authorization denied/);
+  assert.equal(d.getElementById('login-dialog').open,true);
+});
+
 test('invalid device login response cancels native attempt and offers retry',async()=>{
   const {w,calls,snapshot}=setup({
     'auth.login':()=>({loginId:'invalid',userCode:'1234',verificationUrl:'https://evil.example/login'}),
