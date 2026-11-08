@@ -82,18 +82,20 @@ def download(url: str, destination: Path, expected_sha256: str | None = None) ->
         return
     partial = destination.with_suffix(destination.suffix + ".partial")
     partial.unlink(missing_ok=True)
-    # Archived Termux releases can vanish from the rolling primary repository.
-    # Only pinned .deb inputs may use mirror fallbacks; every candidate MUST
-    # match the exact SHA-256 in devtools-lock.json before being accepted.
+    # Archived packages and even the live Packages index may be temporarily
+    # inaccessible on GitHub runners. Try HTTPS Termux mirrors without changing
+    # pinned .deb digests. For the live index, the newly frozen lock records
+    # its SHA-256 and each package's own SHA-256 before downloads proceed.
     urls = [url]
-    if expected_sha256 and url.startswith(POOL_URL):
+    mirrors = (
+        "https://ro.mirror.flokinet.net/termux/termux-main/",
+        "https://repository.su/termux/termux-main/",
+        "https://mirrors.ravidwivedi.in/termux/termux-main/",
+        "https://termux.librehat.com/apt/termux-main/",
+    )
+    if url == INDEX_URL or (expected_sha256 and url.startswith(POOL_URL)):
         suffix = url[len(POOL_URL):]
-        urls.extend(base + suffix for base in (
-            "https://ro.mirror.flokinet.net/termux/termux-main/",
-            "https://repository.su/termux/termux-main/",
-            "https://mirrors.ravidwivedi.in/termux/termux-main/",
-            "https://termux.librehat.com/apt/termux-main/",
-        ))
+        urls.extend(base + suffix for base in mirrors)
     last_error = None
     for candidate in urls:
         try:

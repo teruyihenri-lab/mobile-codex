@@ -1122,6 +1122,11 @@ public final class Engine {
     private JSONObject beginLogin(boolean add) throws Exception {
         ensureEngineIdle();
         autoRestorePaused = false;
+        // The settings screen exposes "Add account" even on a fresh install.
+        // With no primary auth.json there is no account to preserve; use the
+        // ordinary device-code login instead of starting an isolated add-login
+        // transaction, which would fail with "credentials were not found".
+        if (add && !accountProfiles.hasSavedLogin()) add = false;
         // Re-login must not validate a revoked token before reaching device login.
         // Use the existing isolated transaction so cancellation preserves the profile.
         if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;

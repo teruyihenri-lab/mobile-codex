@@ -12,6 +12,9 @@ from pathlib import Path
 import shutil
 import tarfile
 import urllib.request
+import urllib.error
+import time
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +41,47 @@ def patch_host_name(binary, expected_occurrences=2):
     return binary.replace(old, new)
 
 
+def download_runtime(url, archive, integrity, retries=3, github_asset_id=None):
+    """Download the pinned runtime from release/CDN or GitHub's release API.
+
+    Every route must match the same SHA-512. Never ship an unknown archive.
+    The GitHub release API is a fallback for transient 504s on the browser
+    release endpoint; it is not a replacement for integrity verification.
+    """
+    partial = archive.with_suffix('.partial')
+    candidates = [url]
+    if github_asset_id and url.startswith("https://github.com/"):
+        # This asset ID is pinned alongside the release URL in runtime-lock.json.
+        repo = url.removeprefix("https://github.com/").split("/releases/download/", 1)[0]
+        if repo.count("/") == 1 and str(github_asset_id).isdigit():
+            candidates.append(f"https://api.github.com/repos/{repo}/releases/assets/{github_asset_id}")
+    last_error = None
+    for candidate in candidates:
+        for attempt in range(retries):
+            try:
+                partial.unlink(missing_ok=True)
+                headers = {"User-Agent":"mobile-codex-android-packager/1", "Accept":"application/octet-stream"}
+                if candidate.startswith("https://api.github.com/") and os.environ.get("GITHUB_TOKEN"):
+                    headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+                request = urllib.request.Request(candidate, headers=headers)
+                with urllib.request.urlopen(request, timeout=180) as src, partial.open('wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                verify(partial, integrity)
+                partial.replace(archive)
+                return
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+                last_error = error
+                if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
+                    if candidate == candidates[-1]:
+                        raise
+                    break
+                if attempt < retries - 1:
+                    time.sleep(min(2 ** attempt, 4))
+            finally:
+                partial.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not download SHA-512-pinned runtime: {type(last_error).__name__}") from last_error
+
+
 def prepare(archive, lock_path=None):
     lock = json.loads((lock_path or ROOT / 'tools/runtime-lock.json').read_text())
     if lock.get('testOnly') and archive is None:
@@ -46,11 +90,7 @@ def prepare(archive, lock_path=None):
         archive = ROOT / '.runtime-cache' / f"codex-{lock['version']}.tgz"
         archive.parent.mkdir(parents=True, exist_ok=True)
         if not archive.exists():
-            partial = archive.with_suffix('.partial')
-            with urllib.request.urlopen(lock['url'], timeout=180) as src, partial.open('wb') as dst:
-                shutil.copyfileobj(src, dst)
-            verify(partial, lock['integrity'])
-            partial.replace(archive)
+            download_runtime(lock['url'], archive, lock['integrity'], github_asset_id=lock.get('githubAssetId'))
     verify(archive, lock['integrity'])
     out = ROOT / 'app/src/main/jniLibs/arm64-v8a'
     assets = ROOT / 'app/src/main/assets/runtime'

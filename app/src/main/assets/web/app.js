@@ -2007,10 +2007,52 @@
     show('tools-dialog'); const target = $('tools-list');
     const scope = currentToolsScope(), generation = ++toolsGeneration;
     if (toolsScope !== scope) { toolCache.fill(null); toolsScope = scope; }
+    // Do not make Tools launch a broken native app-server: the generic "rpc"
+    // handler starts Codex for every call. A signed-out/failed runtime must be
+    // recovered explicitly, not started three times by opening this screen.
+    if (!state.ready) {
+      const status = node('p', t('Codex가 연결되지 않았습니다. 연결 후 플러그인, 스킬, MCP를 확인하세요.'), 'muted tool-card-notice');
+      const retry = button(t('Codex 시작 / 다시 연결'), async () => {
+        status.textContent = t('Codex를 시작하고 있습니다');
+        try {
+          await call('runtime.start');
+          const latest = await call('state');
+          if (generation !== toolsGeneration || !$('tools-dialog').open) return;
+          if (latest) render(latest);
+          if (!state.ready) throw new Error(t('Codex 연결을 확인하지 못했습니다.'));
+          await loadTools(true);
+        } catch (error) {
+          if (generation === toolsGeneration && $('tools-dialog').open) status.textContent = errorText(error);
+        }
+      }, 'secondary-button');
+      target.replaceChildren(status, retry);
+      return;
+    }
     if (!toolCache.some(Boolean)) target.replaceChildren(node('p', t('불러오는 중…'), 'muted'));
     const cwds = state.cwd ? [state.cwd] : [];
-    const results = await Promise.allSettled([rpc('plugin/list', {cwds, ...(force ? {forceRefetch:true} : {})}), rpc('skills/list', {cwds, ...(force ? {forceReload:true} : {})}), rpc('mcpServerStatus/list', {limit: 100, ...(state.threadId ? {threadId: state.threadId} : {})})]);
-    if (generation !== toolsGeneration || scope !== currentToolsScope()) return;
+    const methods = [
+      ['plugin/list', {cwds, ...(force ? {forceRefetch:true} : {})}],
+      ['skills/list', {cwds, ...(force ? {forceReload:true} : {})}],
+      ['mcpServerStatus/list', {limit:100, ...(state.threadId ? {threadId:state.threadId} : {})}]
+    ];
+    const results = [];
+    // Issue one request at a time. If the native process disconnects, don't
+    // immediately launch it again for the two remaining categories.
+    for (const [method, params] of methods) {
+      if (generation !== toolsGeneration || scope !== currentToolsScope() || !$('tools-dialog').open) return;
+      try {
+        const data = await rpc(method, params);
+        results.push({status:'fulfilled', value:data && typeof data === 'object' ? data : {}});
+      } catch (error) {
+        results.push({status:'rejected', reason:error});
+        if (/codex.*(?:disconnected|stopped|start|running)|native dependency|transport closed|exit code/i.test(String(error?.message || error))) {
+          const stopped = new Error(t('Codex 연결이 끊어졌습니다. 다시 연결한 뒤 시도해 주세요.'));
+          while (results.length < methods.length) results.push({status:'rejected', reason:stopped});
+          break;
+        }
+      }
+    }
+    if (generation !== toolsGeneration || scope !== currentToolsScope() || !$('tools-dialog').open) return;
     target.replaceChildren();
     // Plugins, skills and MCP servers each get a tab; long lists stay searchable instead of one long scroll.
     const titles = [t('플러그인'), t('스킬'), t('MCP 서버')], counts = [0, 0, 0];
@@ -2027,12 +2069,14 @@
     titles.forEach((title, i) => {
       const panel = panels[i], result = results[i];
       if (result.status === 'fulfilled') toolCache[i] = result.value;
-      const data = result.status === 'fulfilled' ? result.value : toolCache[i];
+      const data = (result.status === 'fulfilled' ? result.value : toolCache[i]) || {};
       if (result.status === 'rejected') { card(t('불러오지 못했습니다'), errorText(result.reason) + (data ? t(' 이전 목록을 표시합니다.') : ''), panel).classList.add('tool-card-notice'); if (!data) return; }
       if (i === 0) {
-        for (const market of data.marketplaces || []) {
+        for (const market of (Array.isArray(data.marketplaces) ? data.marketplaces : [])) {
+          if (!market || typeof market !== 'object') continue;
           const parent = group(market.interface?.displayName || market.name, panel);
-          for (const plugin of market.plugins || []) {
+          for (const plugin of (Array.isArray(market.plugins) ? market.plugins : [])) {
+            if (!plugin || typeof plugin !== 'object') continue;
             counts[0]++;
             const c = card(plugin.interface?.displayName || plugin.name, plugin.interface?.shortDescription || plugin.id, parent);
             if (plugin.installed) c.classList.add(plugin.enabled ? 'is-enabled' : 'is-disabled');
@@ -2051,28 +2095,31 @@
             }, 'primary-button'));
           }
         }
-        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), errorText(e.message), panel).classList.add('tool-card-notice');
-        if (!data.marketplaces?.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'), panel).classList.add('tool-card-notice');
+        for (const e of (Array.isArray(data.marketplaceLoadErrors) ? data.marketplaceLoadErrors : [])) card(t('마켓플레이스 오류'), errorText(e?.message), panel).classList.add('tool-card-notice');
+        if (!Array.isArray(data.marketplaces) || !data.marketplaces.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'), panel).classList.add('tool-card-notice');
       } else if (i === 1) {
-        for (const entry of data.data || []) {
-          for (const skill of entry.skills || []) {
+        for (const entry of (Array.isArray(data.data) ? data.data : [])) {
+          if (!entry || typeof entry !== 'object') continue;
+          for (const skill of (Array.isArray(entry.skills) ? entry.skills : [])) {
+            if (!skill || typeof skill !== 'object') continue;
             counts[1]++; const c = card(skill.interface?.displayName || skill.name, skill.description, panel);
             c.classList.add(skill.enabled === false ? 'is-disabled' : 'is-enabled');
             c.querySelector('.tool-card-main').append(node('small', skill.path, 'tool-card-path'));
             actions(c, button(t('대화에 사용'), () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }),
               button(skill.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }));
           }
-          for (const e of entry.errors || []) card(t('스킬 로드 오류'), errorText(e.message), panel).classList.add('tool-card-notice');
+          for (const e of (Array.isArray(entry.errors) ? entry.errors : [])) card(t('스킬 로드 오류'), errorText(e?.message), panel).classList.add('tool-card-notice');
         }
         if (!counts[1]) card(t('설치된 스킬이 없습니다'), t('SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.'), panel).classList.add('tool-card-notice');
       } else {
-        for (const server of data.data || []) {
+        for (const server of (Array.isArray(data.data) ? data.data : [])) {
+          if (!server || typeof server !== 'object') continue;
           counts[2]++;
           const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + t(' · 도구 ') + Object.keys(server.tools || {}).length + t('개'), panel);
           if (server.toolsError) c.querySelector('.tool-card-main').append(node('p', errorText(server.toolsError), 'muted tool-card-error'));
           actions(c, button(t('도구 보기'), () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button(t('로그인'), async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
         }
-        if (!data.data?.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'), panel).classList.add('tool-card-notice');
+        if (!Array.isArray(data.data) || !data.data.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'), panel).classList.add('tool-card-notice');
         if (data.nextCursor) panel.append(node('p', t('표시된 서버: 처음 100개'), 'muted'));
       }
     });
@@ -2463,7 +2510,7 @@
     $('retry-login').hidden = true;
     if (closing?.loginId) call('auth.cancel', {loginId: closing.loginId}).catch(() => {});
   });
-  on('account-add', () => startLogin(true));
+  on('account-add', () => startLogin((state.accounts || []).length > 0 || C.isLoggedIn(state.account)));
   on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', async () => { if (!C.isLoggedIn(state.account)) return startLogin(false); if (!confirm(t('현재 계정을 이 기기에서 로그아웃할까요?'))) return; await call('auth.logout'); });
   on('usage-refresh', loadUsage);
   ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));

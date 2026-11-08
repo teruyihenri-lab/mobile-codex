@@ -388,6 +388,57 @@ test('question UI preserves stable question ids and answer array',async()=>{
  w.document.querySelector('#request-fields input').value='Java';w.document.querySelector('#request-actions button').click();await tick();
  assert.deepEqual(responses[0].result,{answers:{lang:{answers:['Java']}}});
 });
+test('opening Tools while Codex is disconnected never starts native app-server RPC',async()=>{
+  const {w,calls,snapshot}=setup({'runtime.start':()=>{throw Error('Native dependency error');}});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,ready:false,authState:'error',account:{}});
+  const d=w.document;
+  d.getElementById('show-tools').click();await tick();
+  d.getElementById('show-tools-panel').click();await tick();
+  assert.equal(d.getElementById('tools-dialog').open,true);
+  assert.equal(calls.filter(x=>x.action==='rpc').length,0);
+  const retry=[...d.querySelectorAll('#tools-list button')].find(b=>/Codex/.test(b.textContent));
+  assert.ok(retry);
+  retry.click();await tick();await tick();
+  assert.equal(calls.filter(x=>x.action==='runtime.start').length,1);
+  assert.equal(calls.filter(x=>x.action==='rpc').length,0);
+  assert.match(d.getElementById('tools-list').textContent,/Native dependency error/);
+});
+test('offline Tools panel is readable in English without native RPC requests',async()=>{
+  const {w,calls,snapshot}=setup({}, {language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,ready:false,authState:'error'});
+  const d=w.document; d.getElementById('show-tools').click();await tick();
+  d.getElementById('show-tools-panel').click();await tick();
+  assert.match(d.getElementById('tools-list').textContent,/Codex is not connected/);
+  assert.match(d.getElementById('tools-list').textContent,/Start \/ reconnect Codex/);
+  assert.equal(calls.filter(c=>c.action==='rpc').length,0);
+});
+test('a Codex native disconnect aborts remaining Tools requests without relaunch loops',async()=>{
+  const {w,calls}=setup({'rpc':m=>{
+    if (m.args.method==='plugin/list') throw Error('Codex stopped running and disconnected. (Native dependency error)');
+    throw Error('should not be called');
+  }});
+  await tick();
+  const d=w.document;d.getElementById('show-tools').click();await tick();
+  d.getElementById('show-tools-panel').click();await tick();await tick();
+  assert.equal(d.getElementById('tools-dialog').open,true);
+  assert.deepEqual(calls.filter(x=>x.action==='rpc').map(x=>x.args.method),['plugin/list']);
+  assert.match(d.getElementById('tools-list').textContent,/Native dependency error/);
+});
+test('malformed Tools lists are handled without rendering exceptions or blank dialogs',async()=>{
+  const {w,calls}=setup({'rpc':m=>{
+    if(m.args.method==='plugin/list')return {marketplaces:{invalid:true},marketplaceLoadErrors:{not:'an array'}};
+    if(m.args.method==='skills/list')return {data:[null,{skills:{bad:true},errors:{bad:true}}]};
+    return {data:[null,{name:'safe',tools:{}}]};
+  }});
+  await tick();
+  const d=w.document;d.getElementById('show-tools').click();await tick();
+  d.getElementById('show-tools-panel').click();await tick();await tick();
+  assert.equal(calls.filter(x=>x.action==='rpc').length,3);
+  assert.equal(d.getElementById('tools-dialog').open,true);
+  assert.deepEqual([...d.querySelectorAll('.tools-tab .tools-count')].map(x=>x.textContent),['0','0','1']);
+});
 test('plugin, skill, MCP screens query real protocol routes',async()=>{
  const {w,calls}=setup();await tick();w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-tools-panel').click();await tick();await tick();
  const routes=calls.filter(m=>m.action==='rpc').map(m=>m.args.method);
@@ -571,6 +622,29 @@ test('quota reset captions localize English without changing the percentage',asy
  assert.equal(d.getElementById('quota-percent').textContent,'63%');assert.match(d.getElementById('quota-caption').textContent,/^Resets /);
  d.getElementById('account-button').click();await tick();await tick();
  assert.match(d.getElementById('usage-limits').textContent,/Resets [\s\S]*Weekly limit/);
+});
+
+test('first account from settings uses ordinary ChatGPT device login instead of add-profile transaction',async()=>{
+  const {w,calls,snapshot}=setup({
+    'auth.login':()=>({loginId:'fresh',userCode:'ABCD',verificationUrl:'https://auth.openai.com/codex/device'}),
+    'auth.add':()=>{throw Error('must not try to preserve missing credentials');}
+  }, {language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},accounts:[],authState:'signed_out'});
+  w.document.getElementById('account-button').click();await tick();
+  w.document.getElementById('account-add').click();await tick();await tick();
+  assert.equal(calls.filter(x=>x.action==='auth.login').length,1);
+  assert.equal(calls.filter(x=>x.action==='auth.add').length,0);
+  assert.equal(w.document.getElementById('device-code').textContent,'ABCD');
+  assert.equal(w.document.getElementById('open-login').disabled,false);
+});
+test('English UI translates login connection failure instead of showing untranslated Korean',async()=>{
+  const {w,snapshot}=setup({'auth.login':()=>{throw Error('network unavailable');}},{language:'en'});
+  await tick();
+  w.mobileCodexEvent('state',{...snapshot,account:{},accounts:[],authState:'signed_out'});
+  w.document.getElementById('connect').click();await tick();await tick();
+  assert.equal(w.document.getElementById('device-code').textContent,'Could not connect.');
+  assert.match(w.document.getElementById('login-help').textContent,/network unavailable/);
 });
 
 test('failed device-code startup stays in the dialog and offers a retry',async()=>{
