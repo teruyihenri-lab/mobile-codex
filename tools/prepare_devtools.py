@@ -438,6 +438,26 @@ def open_tar(name: str, data: bytes) -> tarfile.TarFile:
         raise PackagingError(f"cannot read {name}") from error
 
 
+def termux_symlink_target(member_name: str, link_name: str) -> str:
+    """Resolve a package symlink only within the bundled Termux usr tree.
+
+    Termux Python/pip packages may use an absolute link such as
+    /data/data/com.termux/files/usr/etc/tls/cert.pem. Such a link is safe
+    to represent *inside the extracted virtual prefix*, but an arbitrary
+    absolute path, or a relative path escaping the prefix, is not.
+    Never follow package symlinks on the build host.
+    """
+    member = posixpath.normpath(member_name.replace("\\", "/"))
+    link = link_name.replace("\\", "/")
+    if not link or "\x00" in link:
+        raise PackagingError(f"unsafe tar symlink: {member_name!r}")
+    target = posixpath.normpath(link if link.startswith("/") else posixpath.join(posixpath.dirname(member), link))
+    target = target.removeprefix("/") if link.startswith("/") else target
+    if not is_prefix_path(target):
+        raise PackagingError(f"unsafe tar symlink: {member_name!r}")
+    return relative_prefix_path(target)
+
+
 def safe_tar_members(archive: tarfile.TarFile) -> Iterable[tarfile.TarInfo]:
     for member in archive:
         name = member.name.replace("\\", "/")
@@ -450,10 +470,7 @@ def safe_tar_members(archive: tarfile.TarFile) -> Iterable[tarfile.TarInfo]:
         if member.islnk() or member.isdev() or member.isfifo():
             raise PackagingError(f"unsupported tar member type: {member.name!r}")
         if member.issym():
-            link = member.linkname.replace("\\", "/")
-            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(normalized), link))
-            if link.startswith("/") or resolved.startswith("../"):
-                raise PackagingError(f"unsafe tar symlink: {member.name!r}")
+            termux_symlink_target(member.name, member.linkname)
         elif not (member.isfile() or member.isdir()):
             raise PackagingError(f"unsupported tar member type: {member.name!r}")
         yield member
@@ -725,7 +742,7 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
                     if member.issym():
                         if relative in files or relative in symlinks:
                             raise PackagingError(f"duplicate installed path: {relative}")
-                        symlinks[relative] = posixpath.normpath(posixpath.join(posixpath.dirname(relative), member.linkname))
+                        symlinks[relative] = termux_symlink_target(member.name, member.linkname)
                         continue
                     stream = archive.extractfile(member)
                     if stream is None:
