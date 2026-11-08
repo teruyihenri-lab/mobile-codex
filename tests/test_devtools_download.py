@@ -25,7 +25,7 @@ class PinnedDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dest = Path(directory) / 'input.deb'
             url = devtools.POOL_URL + 'pool/input.deb'
-            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[urllib.error.HTTPError(url, 404, 'missing', {}, None), io.BytesIO(b'wrong')]):
+            with patch.object(devtools.urllib.request, 'urlopen', side_effect=[urllib.error.HTTPError(url, 404, 'missing', {}, None)] + [io.BytesIO(b'wrong') for _ in range(4)]):
                 with self.assertRaises(devtools.PackagingError):
                     devtools.download(url, dest, hashlib.sha256(b'right').hexdigest())
             self.assertFalse(dest.exists())
