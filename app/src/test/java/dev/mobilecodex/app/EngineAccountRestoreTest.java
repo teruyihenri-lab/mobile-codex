@@ -106,6 +106,29 @@ public class EngineAccountRestoreTest {
         } finally { release.countDown(); }
         assertEquals("signed_in", handle("state").getString("authState"));
     }
+    @Test public void addAccountOnFirstInstallStartsOrdinaryDeviceLoginWithoutSavedCredentials() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        create((method, args) -> {
+            if ("account/read".equals(method)) return obj("account", JSONObject.NULL);
+            if ("account/login/start".equals(method)) {
+                starts.incrementAndGet();
+                assertEquals("chatgptDeviceCode", args.getString("type"));
+                return obj("loginId", "fresh-login", "userCode", "ABCD",
+                    "verificationUrl", "https://auth.openai.com/codex/device");
+            }
+            if ("account/login/cancel".equals(method)) return obj();
+            throw new AssertionError("Unexpected RPC: " + method);
+        });
+        JSONObject login = handle("auth.add");
+        assertEquals("fresh-login", login.getString("loginId"));
+        assertEquals(1, starts.get());
+        File home = new File(context.getFilesDir(), ".codex");
+        assertEquals(home, engine.processHomeForTest());
+        assertFalse(new AccountProfiles(home, context.getFilesDir()).hasPendingAddLogin());
+        handle("auth.cancel");
+        assertEquals(home, engine.processHomeForTest());
+    }
+
     @Test public void firstInstallShowsLoginWithoutStartingAnEngine() throws Exception {
         create((method, args) -> { throw new AssertionError(method); });
         engine.restoreAccount();
