@@ -2463,7 +2463,7 @@
     $('retry-login').hidden = true;
     if (closing?.loginId) call('auth.cancel', {loginId: closing.loginId}).catch(() => {});
   });
-  on('account-add', () => startLogin(true));
+  on('account-add', () => startLogin((state.accounts || []).length > 0 || C.isLoggedIn(state.account)));
   on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', async () => { if (!C.isLoggedIn(state.account)) return startLogin(false); if (!confirm(t('현재 계정을 이 기기에서 로그아웃할까요?'))) return; await call('auth.logout'); });
   on('usage-refresh', loadUsage);
   ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));
