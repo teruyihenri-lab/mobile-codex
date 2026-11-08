@@ -42,6 +42,18 @@ class PackagingTests(unittest.TestCase):
                     runtime.download_runtime('https://example.test/asset',archive,integrity)
             self.assertEqual(get.call_count,1)
 
+    def test_runtime_retrieves_same_sha512_archive_via_pinned_github_asset_api(self):
+        data=b'verified runtime bytes'
+        integrity='sha512-' + base64.b64encode(hashlib.sha512(data).digest()).decode()
+        missing=urllib.error.HTTPError('https://github.com/example/project/releases/download/tag/a.tgz',504,'Gateway timeout',{},None)
+        with tempfile.TemporaryDirectory() as directory:
+            archive=Path(directory)/'runtime.tgz'
+            with patch.object(runtime.urllib.request,'urlopen',side_effect=[missing,missing,missing,io.BytesIO(data)]) as get, patch.object(runtime.time,'sleep'):
+                runtime.download_runtime('https://github.com/example/project/releases/download/tag/a.tgz',archive,integrity,retries=3,github_asset_id=1234)
+            self.assertEqual(get.call_count,4)
+            self.assertTrue(get.call_args.args[0].full_url.endswith('/repos/example/project/releases/assets/1234'))
+            self.assertEqual(archive.read_bytes(),data)
+
     def test_archive_integrity_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'runtime.tgz'
