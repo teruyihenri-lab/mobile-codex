@@ -2215,7 +2215,16 @@
     else if (name === 'voice.state') drawDictation(data);
     else if (name === 'voice.changed') recoverVoiceInput();
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
-    else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); } else $('login-help').textContent = data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'); }
+    else if (name === 'login.completed') {
+      if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); }
+      else if ($('login-dialog').open) {
+        login = null;
+        $('open-login').disabled = true;
+        $('device-code').textContent = t('연결하지 못했습니다.');
+        $('login-help').textContent = errorText(data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'));
+        $('retry-login').hidden = false;
+      }
+    }
     else if (name === 'terminal.state') renderTerminal(data);
     else if (name === 'terminal.inputError' && data.id === terminalState.id && data.revision > terminalState.revision && terminalState.running && !terminalState.stopping) {
       terminalState.revision = data.revision;
