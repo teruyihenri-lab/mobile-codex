@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import io
+import tarfile
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,30 @@ class DevtoolsPackagingTests(unittest.TestCase):
             "libandroid-shmem": {}, "libtalloc": {},
         }
         self.assertEqual(devtools.resolve_packages(index, ("proot",)), ["libandroid-shmem", "libtalloc", "proot"])
+
+    def test_symlinks_to_absolute_termux_prefix_are_relocated_without_host_access(self):
+        member = './data/data/com.termux/files/usr/lib/python3.14/site-packages/pip/_vendor/certifi/cacert.pem'
+        pinned = '/data/data/com.termux/files/usr/etc/tls/cert.pem'
+        self.assertEqual(devtools.termux_symlink_target(member, pinned), 'etc/tls/cert.pem')
+        self.assertEqual(devtools.termux_symlink_target(member, '../../../../../../etc/tls/cert.pem'),
+                         'etc/tls/cert.pem')
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode='w') as tar:
+            record = tarfile.TarInfo(member)
+            record.type = tarfile.SYMTYPE
+            record.linkname = pinned
+            tar.addfile(record)
+        archive.seek(0)
+        with tarfile.open(fileobj=archive, mode='r:') as tar:
+            self.assertEqual(len(list(devtools.safe_tar_members(tar))), 1)
+
+    def test_absolute_or_relative_symlinks_escape_termux_are_rejected(self):
+        member = './data/data/com.termux/files/usr/lib/python3.14/site-packages/pip/_vendor/certifi/cacert.pem'
+        for target in ('/etc/passwd', '/data/data/com.termux/files/usr/../../outside',
+                       '../../../../../../../../../../etc/passwd',
+                       '/data/data/com.termux/files/other/secrets'):
+            with self.subTest(target=target), self.assertRaisesRegex(devtools.PackagingError, 'unsafe tar symlink'):
+                devtools.termux_symlink_target(member, target)
 
     def test_archive_validation_rejects_path_traversal_symlink_and_elf(self):
         with tempfile.TemporaryDirectory() as directory:
